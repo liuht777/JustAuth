@@ -1,25 +1,23 @@
 package me.zhyd.oauth.request;
 
-import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import com.alibaba.fastjson.JSONObject;
 import me.zhyd.oauth.config.AuthConfig;
 import me.zhyd.oauth.config.AuthSource;
+import me.zhyd.oauth.enums.AuthUserGender;
 import me.zhyd.oauth.exception.AuthException;
 import me.zhyd.oauth.model.AuthCallback;
 import me.zhyd.oauth.model.AuthToken;
 import me.zhyd.oauth.model.AuthUser;
-import me.zhyd.oauth.model.AuthUserGender;
 import me.zhyd.oauth.utils.UrlBuilder;
 
 /**
  * 腾讯云登录
  *
  * @author yadong.zhang (yadong.zhang0415(a)gmail.com)
- * @version 1.0
- * @since 1.8
+ * @since 1.0.0
  */
-public class AuthTencentCloudRequest extends BaseAuthRequest {
+public class AuthTencentCloudRequest extends AuthDefaultRequest {
 
     public AuthTencentCloudRequest(AuthConfig config) {
         super(config, AuthSource.TENCENT_CLOUD);
@@ -27,51 +25,65 @@ public class AuthTencentCloudRequest extends BaseAuthRequest {
 
     @Override
     protected AuthToken getAccessToken(AuthCallback authCallback) {
-        String accessTokenUrl = UrlBuilder.getTencentCloudAccessTokenUrl(config.getClientId(), config.getClientSecret(), authCallback.getCode());
-        HttpResponse response = HttpRequest.get(accessTokenUrl).execute();
+        HttpResponse response = doGetAuthorizationCode(authCallback.getCode());
         JSONObject accessTokenObject = JSONObject.parseObject(response.body());
-        if (accessTokenObject.getIntValue("code") != 0) {
-            throw new AuthException("Unable to get token from tencent cloud using code [" + authCallback.getCode() + "]: " + accessTokenObject.get("msg"));
-        }
+        this.checkResponse(accessTokenObject);
         return AuthToken.builder()
-                .accessToken(accessTokenObject.getString("access_token"))
-                .expireIn(accessTokenObject.getIntValue("expires_in"))
-                .refreshToken(accessTokenObject.getString("refresh_token"))
-                .build();
+            .accessToken(accessTokenObject.getString("access_token"))
+            .expireIn(accessTokenObject.getIntValue("expires_in"))
+            .refreshToken(accessTokenObject.getString("refresh_token"))
+            .build();
     }
 
     @Override
     protected AuthUser getUserInfo(AuthToken authToken) {
-        String accessToken = authToken.getAccessToken();
-        HttpResponse response = HttpRequest.get(UrlBuilder.getTencentCloudUserInfoUrl(accessToken)).execute();
+        HttpResponse response = doGetUserInfo(authToken);
         JSONObject object = JSONObject.parseObject(response.body());
-        if (object.getIntValue("code") != 0) {
-            throw new AuthException(object.getString("msg"));
-        }
+        this.checkResponse(object);
+
         object = object.getJSONObject("data");
         return AuthUser.builder()
-                .uuid(object.getString("id"))
-                .username(object.getString("name"))
-                .avatar("https://dev.tencent.com/" + object.getString("avatar"))
-                .blog("https://dev.tencent.com/" + object.getString("path"))
-                .nickname(object.getString("name"))
-                .company(object.getString("company"))
-                .location(object.getString("location"))
-                .gender(AuthUserGender.getRealGender(object.getString("sex")))
-                .email(object.getString("email"))
-                .remark(object.getString("slogan"))
-                .token(authToken)
-                .source(AuthSource.TENCENT_CLOUD)
-                .build();
+            .uuid(object.getString("id"))
+            .username(object.getString("name"))
+            .avatar("https://dev.tencent.com/" + object.getString("avatar"))
+            .blog("https://dev.tencent.com/" + object.getString("path"))
+            .nickname(object.getString("name"))
+            .company(object.getString("company"))
+            .location(object.getString("location"))
+            .gender(AuthUserGender.getRealGender(object.getString("sex")))
+            .email(object.getString("email"))
+            .remark(object.getString("slogan"))
+            .token(authToken)
+            .source(source)
+            .build();
     }
 
     /**
-     * 返回认证url，可自行跳转页面
+     * 检查响应内容是否正确
      *
+     * @param object 请求响应内容
+     */
+    private void checkResponse(JSONObject object) {
+        if (object.getIntValue("code") != 0) {
+            throw new AuthException(object.getString("msg"));
+        }
+    }
+
+    /**
+     * 返回带{@code state}参数的授权url，授权回调时会带上这个{@code state}
+     *
+     * @param state state 验证授权流程的参数，可以防止csrf
      * @return 返回授权地址
+     * @since 1.9.3
      */
     @Override
-    public String authorize() {
-        return UrlBuilder.getTencentCloudAuthorizeUrl(config.getClientId(), config.getRedirectUri(), config.getState());
+    public String authorize(String state) {
+        return UrlBuilder.fromBaseUrl(source.authorize())
+            .queryParam("response_type", "code")
+            .queryParam("client_id", config.getClientId())
+            .queryParam("redirect_uri", config.getRedirectUri())
+            .queryParam("scope", "user")
+            .queryParam("state", getRealState(state))
+            .build();
     }
 }
